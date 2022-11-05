@@ -1,0 +1,14 @@
+<form [formGroup]="formGroup" (ngSubmit)="onSubmit()">
+
+  <div class="input-group">
+    <div class="input-group-prepend">
+      <span class="input-group-text">ID</span>
+    </div>
+
+    <select class="form-control mb-4" formControlName="id">
+      <option *ngFor="let fruit of fruits" [value]="fruit.id">{{fruit.name || fruit.id }}</option>
+    </select>
+  </div>
+
+  <button type="submit" [disabled]="false" class="btn btn-primary">Ok</button>
+</form>

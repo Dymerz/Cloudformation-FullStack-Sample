@@ -1,0 +1,319 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: Create and configure core infrastructure for running Front/Back/Database
+
+# Parameters:
+#   InternetGateway:
+#     Description: The Internet Gateway to use for the Load Balancer
+#     Type: AWS::EC2::InternetGateway
+
+Resources:
+
+  ######################
+  # ECS/ECR definitions
+  ######################
+
+  # ECS Cluster configuration
+  EcsCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      CapacityProviders:
+        - FARGATE
+        - FARGATE_SPOT
+      ClusterName: !Sub '${AWS::StackName}-ecs-cluster'
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enabled
+      Configuration:
+        ExecuteCommandConfiguration:
+          Logging: DEFAULT
+      Tags:
+        - Key: 'ecs:cluster:createdFrom'
+          Value: ecs-console-v2
+
+  # # Frontend images Registry
+  EcrFrontend:
+    Type: AWS::ECR::Repository
+    # UpdateReplacePolicy: Retain
+    # DeletionPolicy: Retain
+    Properties:
+      RepositoryName: !Sub '${AWS::StackName}-frontend'
+      Tags:
+        - Key: Name
+          Value: ECR Repository
+
+  # Backend images Registry
+  EcrBackend:
+    Type: AWS::ECR::Repository
+    # UpdateReplacePolicy: Retain
+    # DeletionPolicy: Retain
+    Properties:
+      RepositoryName: !Sub '${AWS::StackName}-backend'
+      Tags:
+        - Key: Name
+          Value: ECR Repository
+
+  ############################
+  # Load Balancer definitions
+  ############################
+
+  # Load Balancer configuration
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub '${AWS::StackName}-alb'
+      IpAddressType: ipv4
+      Scheme: internet-facing
+      SecurityGroups:
+        - !Ref LoadBalancerSecurityGroup
+      Subnets:
+        - !Ref Subnet1
+        - !Ref Subnet2
+      Type: application
+      LoadBalancerAttributes:
+        - Key: "access_logs.s3.enabled"
+          Value: "false"
+        - Key: "idle_timeout.timeout_seconds"
+          Value: "60"
+        - Key: "deletion_protection.enabled"
+          Value: "false"
+        - Key: "routing.http2.enabled"
+          Value: "true"
+        - Key: "routing.http.drop_invalid_header_fields.enabled"
+          Value: "false"
+
+  # Load Balancer HTTP 80 port listener, default forward to frontend
+  ListenerDefault:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: "forward"
+          TargetGroupArn: !Ref DefaultTargetGroup
+
+  # Load Balancer Target group default to port 80
+  DefaultTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub ${AWS::StackName}-default
+      VpcId: !Ref VPC
+      Port: 80
+      Protocol: HTTP
+
+  ######################
+  # Network definitions
+  ######################
+
+  # Internet Gateway
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-ig
+
+  # Attach the VPC to the Internet Gateway
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # Load Balancer VPC
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.1.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-vpc
+
+  # Load Balancer Subnet 1
+  Subnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: us-east-1a
+      VpcId: !Ref VPC
+      CidrBlock: 10.1.10.0/24
+      MapPublicIpOnLaunch: true # TODO DISABLE
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-private-1
+
+  # Load Balancer Subnet 2
+  Subnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.1.20.0/24
+      AvailabilityZone: us-east-1b
+      MapPublicIpOnLaunch: true # TODO DISABLE
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-private-2
+
+  # Security Group of tyhe Load Balancer that face to the internet
+  LoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable HTTP(s) access on port 80 and 3000
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - CidrIp: 0.0.0.0/0
+          IpProtocol: "-1"
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-LoadBalancer
+
+  # Security Group for the ECS host
+  ECSHostSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable HTTP(s) access on port 80 and 3000
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
+          IpProtocol: "-1"
+        - CidrIp: !GetAtt VPC.CidrBlock
+          IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-ECSHostSecurityGroup
+
+  ######################
+  # Network Routing
+  ######################
+
+  # Routing Table
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-router-table
+
+  # Public Route definition
+  Route:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref RouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  # Subnet Route Association
+  Subnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref Subnet1
+      RouteTableId: !Ref RouteTable
+
+  # Subnet Route Association
+  Subnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref Subnet2
+      RouteTableId: !Ref RouteTable
+
+  ##################################
+  # Describe Application containers
+  ##################################
+
+
+  ##################################
+  # Application services deployment
+  ##################################
+
+  RDSSubnetGroup:
+    Type: "AWS::RDS::DBSubnetGroup"
+    Properties:
+      DBSubnetGroupDescription: Database subnet to be avaliable from Backend
+      SubnetIds:
+        - !Ref Subnet1
+        - !Ref Subnet2
+
+  # PostgreSQL Database
+  RDSPostgres:
+    Type: AWS::RDS::DBInstance
+    UpdateReplacePolicy: Retain
+    DeletionPolicy: Retain
+    Properties:
+      AllocatedStorage: "25"
+      DBInstanceIdentifier: !Sub "${AWS::StackName}-database"
+      DBInstanceClass: db.t3.small
+      MultiAZ: true
+      VPCSecurityGroups:
+        - !Ref ECSHostSecurityGroup
+      DBSubnetGroupName: !Ref RDSSubnetGroup
+      Engine: postgres
+      PubliclyAccessible: true # TODO DISABLE
+      MasterUsername: postgres
+      MasterUserPassword: lpsselcelc
+      DBName: example
+
+Outputs:
+
+  LoadBalancerUrl:
+    Description: The public URL
+    Value: !GetAtt LoadBalancer.DNSName
+
+  ClusterId:
+    Description: The ECS Cluster
+    Value: !Ref EcsCluster
+    Export:
+      Name: !Sub "${AWS::StackName}-cluster"
+
+  VPCId:
+    Description: The VPC ID used to place resources in
+    Value: !Ref VPC
+    Export:
+      Name: !Sub "${AWS::StackName}-vpc"
+
+  ECSHostSecurityGroupId:
+    Description: The Security Group used for ECS services
+    Value: !Ref ECSHostSecurityGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-ecs-security-group"
+
+  ListenerId:
+    Description: The Load Balancer default Listener
+    Value: !Ref ListenerDefault
+    Export:
+      Name: !Sub "${AWS::StackName}-listener-default"
+
+  ECRFrontendRepositoryUri:
+    Description: The Frontend ECR Repository
+    Value: !GetAtt EcrFrontend.RepositoryUri
+    Export:
+      Name: !Sub "${AWS::StackName}-ecr-frontend-uri"
+
+  ECRBackendRepositoryUri:
+    Description: The Backend ECR Repository
+    Value: !GetAtt EcrBackend.RepositoryUri
+    Export:
+      Name: !Sub "${AWS::StackName}-ecr-backend-uri"
+
+  DatabaseUrl:
+    Description: The Database URL
+    Value: !GetAtt RDSPostgres.Endpoint.Address
+    Export:
+      Name: !Sub "${AWS::StackName}-database-url"
+
+  Subnet1:
+    Description: The Subnet1 ID
+    Value: !Ref Subnet1
+    Export:
+      Name: !Sub "${AWS::StackName}-subnet1"
+
+  Subnet2:
+    Description: The Subnet2 ID
+    Value: !Ref Subnet2
+    Export:
+      Name: !Sub "${AWS::StackName}-subnet2"

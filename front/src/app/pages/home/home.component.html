@@ -1,0 +1,20 @@
+<ng-container>
+  <div class="container">
+    <div class="row text-center pt-4">
+      <div class="col"><button class="btn btn-primary" (click)="onPingClicked()">Ping 🏓</button></div>
+      <div class="col"><button class="btn btn-primary" (click)="onGetFruitsClicked()">Get fruits 🍇</button></div>
+      <div class="col"><button class="btn btn-primary" (click)="onGetFruitClicked()">Get a fruit</button></div>
+      <div class="col"><button class="btn btn-primary" (click)="onDeleteFruitClicked()">Remove fruits</button></div>
+      <div class="col"><button class="btn btn-primary" (click)="onCreateFruitClicked()">Create fruit</button></div>
+    </div>
+  </div>
+
+  <div class="row pt-4">
+    <textarea
+      class="form-control"
+      [formControl]="output"
+      cols="30"
+      rows="10"
+      readonly></textarea>
+  </div>
+</ng-container>

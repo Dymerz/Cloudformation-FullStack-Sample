@@ -1,0 +1,155 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: Create Frontend service
+
+Parameters:
+
+  InfrastructureStackName:
+    Description: Name of the base stack with all infra resources
+    Type: String
+    Default: simple-infra
+
+  ImageTag:
+    Description: Provide the image tag used for the deployment
+    Type: String
+    Default: latest
+
+Resources:
+
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${AWS::StackName}-execution-role'
+      Path: /
+      AssumeRolePolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service:
+                  - ecs-tasks.amazonaws.com
+              Action:
+                - 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: ecs-service
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:PutLogEvents
+                  - logs:CreateLogGroup
+                Resource: '*'
+
+  ListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn:
+        Fn::ImportValue:
+          !Sub "${InfrastructureStackName}-listener-default"
+      Priority: 2
+      Conditions:
+        - Field: path-pattern
+          PathPatternConfig:
+            Values:
+              - "/*"
+      Actions:
+        - TargetGroupArn: !Ref TargetGroup
+          Type: forward
+
+  # Load Balancer Frontend Target Group
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId:
+        Fn::ImportValue:
+          !Sub "${InfrastructureStackName}-vpc"
+      Port: 80
+      TargetType: ip
+      Protocol: HTTP
+      HealthCheckEnabled: true
+      HealthCheckIntervalSeconds: 60
+      HealthCheckPath: /
+      Matcher:
+        HttpCode: 200-299
+      TargetGroupAttributes:
+        - Key: "stickiness.enabled"
+          Value: "false"
+        - Key: "deregistration_delay.timeout_seconds"
+          Value: "300"
+        - Key: "stickiness.type"
+          Value: "lb_cookie"
+        - Key: "stickiness.lb_cookie.duration_seconds"
+          Value: "86400"
+        - Key: "slow_start.duration_seconds"
+          Value: "0"
+        - Key: "load_balancing.algorithm.type"
+          Value: "round_robin"
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-frontend
+
+  # Define the Frontend container running environment
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Cpu: "256" # 0.25 cpu unit
+      Memory: '1024' # 1GB
+      NetworkMode: awsvpc
+      Family: !Sub "${AWS::StackName}-frontend"
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      RequiresCompatibilities:
+        - FARGATE
+      RuntimePlatform:
+        CpuArchitecture: X86_64
+        OperatingSystemFamily: LINUX
+      ContainerDefinitions:
+        - Name: frontend
+          Essential: true
+          Image: !Join
+            - ":"
+            - - Fn::ImportValue: !Sub "${InfrastructureStackName}-ecr-frontend-uri"
+              - !Ref ImageTag
+          PortMappings:
+            - ContainerPort: 80
+              Protocol: tcp
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: "frontend"
+              awslogs-region: "us-east-1"
+              awslogs-create-group: "true"
+              awslogs-stream-prefix: "frontend"
+
+  # The service to deploy
+  Service:
+    Type: AWS::ECS::Service
+    DependsOn: ListenerRule
+    Properties:
+      Cluster:
+        Fn::ImportValue:
+          !Sub "${InfrastructureStackName}-cluster"
+      TaskDefinition: !Ref TaskDefinition
+      ServiceName: frontend
+      SchedulingStrategy: REPLICA
+      DesiredCount: 2
+      CapacityProviderStrategy:
+        - CapacityProvider: FARGATE
+          Base: 0
+          Weight: 1
+      LoadBalancers:
+        - ContainerName: frontend
+          ContainerPort: 80
+          TargetGroupArn: !Ref TargetGroup
+      DeploymentController:
+        Type: CODE_DEPLOY
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          SecurityGroups:
+            - Fn::ImportValue: !Sub "${InfrastructureStackName}-ecs-security-group"
+          Subnets:
+            - Fn::ImportValue: !Sub "${InfrastructureStackName}-subnet1"
+            - Fn::ImportValue: !Sub "${InfrastructureStackName}-subnet2"

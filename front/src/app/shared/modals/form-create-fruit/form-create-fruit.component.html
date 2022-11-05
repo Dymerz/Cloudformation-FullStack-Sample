@@ -1,0 +1,11 @@
+<form [formGroup]="formGroup" (ngSubmit)="onSubmit()">
+
+  <div class="input-group">
+    <div class="input-group-prepend">
+      <span class="input-group-text">Name</span>
+    </div>
+    <input type="text" class="form-control mb-4" formControlName="name">
+  </div>
+
+  <button type="submit" [disabled]="false" class="btn btn-primary">Create</button>
+</form>

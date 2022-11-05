@@ -1,0 +1,35 @@
+# NOTE
+# This file is used to enhance the developer container experience and is not indented for deployment uses
+# tp
+
+version: '3.8'
+
+services:
+
+  frontend:
+    image: fruits-frontend:latest
+    build: ./front
+    ports:
+      - 4200:80
+
+  backend:
+    image: fruits-backend:latest
+    build: ./back
+    # volumes:
+    #   - ./back:/app
+    ports:
+      - 31000:80
+    environment:
+      DATABASE_HOST: database
+
+  database:
+    image: bitnami/postgresql:latest
+    volumes:
+      - postgresql-data:/bitnami/postgresql
+      - database/init.sql:/docker-entrypoint-initdb.d/init.sql
+    environment:
+      POSTGRESQL_USERNAME: backend
+      POSTGRESQL_PASSWORD: lpsselcelc
+      POSTGRESQL_DATABASE: example
+    ports:
+      - 5432:5432
